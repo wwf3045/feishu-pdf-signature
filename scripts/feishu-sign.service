@@ -1,0 +1,15 @@
+[Unit]
+Description=Feishu PDF Signature Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/feishu-pdf-signature
+Environment="PATH=/opt/feishu-pdf-signature/venv/bin"
+ExecStart=/opt/feishu-pdf-signature/venv/bin/python server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
