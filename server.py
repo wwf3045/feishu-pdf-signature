@@ -24,6 +24,10 @@ app = Flask(__name__)
 CORS(app)
 app.config['SECRET_KEY'] = secrets.token_hex(32)
 
+# 信任反向代理（支持 https 反代后生成正确的 URL）
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
 # 路径
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
@@ -147,20 +151,17 @@ def validate_token(token):
         print(f"Token 验证失败: {e}")
         return None
 
-def mark_token_used(token):
-    """标记 token 为已使用"""
+def delete_token(token):
+    """删除 token 记录"""
     try:
         tokens = load_tokens()
-
         if token in tokens:
-            tokens[token]['used'] = True
-            tokens[token]['used_at'] = datetime.datetime.now().isoformat()
+            del tokens[token]
             save_tokens(tokens)
+            print(f"🗑️ Token 已删除")
             return True
     except Exception as e:
-        print(f"标记 token 失败: {e}")
-        pass
-    return False
+        print(f"删除 token 失败: {e}")
     return False
 
 # 飞书 API
@@ -524,12 +525,11 @@ def create_demo_pdf_bytes():
         return b'%PDF-1.4'
 
 def embed_signature_in_pdf(pdf_bytes, signature_bytes, position_data):
-    """将签字图片嵌入 PDF 指定位置,保留所有页面"""
+    """使用 PyMuPDF 将签字图片嵌入 PDF 指定位置,保留所有页面和文字质量"""
     try:
-        from pdf2image import convert_from_bytes
-        from PIL import Image
+        import fitz  # PyMuPDF
         import io
-        from pypdf import PdfReader, PdfWriter
+        from PIL import Image
 
         print(f"📐 位置信息: {position_data}")
 
@@ -545,70 +545,57 @@ def embed_signature_in_pdf(pdf_bytes, signature_bytes, position_data):
 
         print(f"📝 签字位置: 页{page_num}, x={x}, y={y}, 宽={sig_width}, 高={sig_height}")
 
-        # 获取原PDF总页数
-        reader = PdfReader(io.BytesIO(pdf_bytes))
-        total_pages = len(reader.pages)
+        # 用 PyMuPDF 打开 PDF
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+        total_pages = len(pdf_doc)
         print(f"📄 PDF总页数: {total_pages}")
 
-        # 将整个PDF转换为图片
-        print("🖼️ 正在转换 PDF 为图片...")
-        images = convert_from_bytes(pdf_bytes, dpi=150)
-        if not images:
-            print("❌ PDF 转换失败")
+        if page_num < 1 or page_num > total_pages:
+            print(f"⚠️ 页码 {page_num} 超出范围")
             return pdf_bytes
 
-        print(f"✅ 转换得到 {len(images)} 张图片")
+        # 获取目标页面
+        page = pdf_doc[page_num - 1]  # PyMuPDF 页码从0开始
+        page_width = page.rect.width
+        page_height = page.rect.height
+        print(f"✅ 第{page_num}页尺寸: {page_width}x{page_height}")
 
-        # 打开签字图片(保持原始大小,后面会按比例缩放)
+        # 前端发送的坐标是600x800设计坐标系,原点在左下角
+        # 需要映射到实际 PDF 页面尺寸
+        # PyMuPDF 坐标系: y=0 是左上角, y=page_height 是左下角 (与PDF标准一致)
+        x_ratio = page_width / 600.0
+        y_ratio = page_height / 800.0
+
+        # 计算签字在 PDF 中的位置和大小
+        # 前端 y=0 是底部, y=800 是顶部
+        # PyMuPDF y=0 是顶部, y=page_height 是底部
+        # 所以: pymupdf_y = page_height - frontend_y
+        sig_x0 = x * x_ratio
+        sig_y0 = page_height - y * y_ratio - sig_height * y_ratio
+        sig_x1 = sig_x0 + sig_width * x_ratio
+        sig_y1 = page_height - y * y_ratio
+
+        print(f"📍 坐标映射: 前端(600x800)→实际({page_width}x{page_height})")
+        print(f"📍 前端坐标: x={x}, y={y}, sig_w={sig_width}, sig_h={sig_height}")
+        print(f"📍 PDF坐标: sig_x0={sig_x0}, sig_y0={sig_y0}, sig_x1={sig_x1}, sig_y1={sig_y1}")
+
+        # 将签字图片转换为 PNG 格式(确保透明度正确)
         sig_image = Image.open(io.BytesIO(signature_bytes)).convert("RGBA")
+        sig_buffer = io.BytesIO()
+        sig_image.save(sig_buffer, format='PNG')
+        sig_buffer.seek(0)
 
-        # 在对应页面上添加签字
-        target_page_idx = page_num - 1  # 转为0索引
-        if target_page_idx < len(images):
-            page_image = images[target_page_idx]
-            pdf_width, pdf_height = page_image.size
-            print(f"✅ 第{page_num}页尺寸: {pdf_width}x{pdf_height}")
+        # 将签字图片插入 PDF 页面
+        # PyMuPDF 的 from_buffer 接收字节流
+        img_rect = fitz.Rect(sig_x0, sig_y0, sig_x1, sig_y1)
+        page.insert_image(img_rect, stream=sig_buffer.getvalue())
+        print(f"✅ 签字图片已插入 PDF")
 
-            # 前端发送的坐标是600x800设计坐标系,原点在左下角
-            # 需要映射到实际图片尺寸
-            # x_ratio = pdf_width / 600, y_ratio = pdf_height / 800
-            x_ratio = pdf_width / 600.0
-            y_ratio = pdf_height / 800.0
-
-            # PDF坐标系:y=0是底部,y=800是顶部
-            # 图片坐标系:y=0是顶部,y=pdf_height是底部
-            # 所以:y_offset = (800 - y - sig_height) * y_ratio
-            x_pos = x * x_ratio
-            y_offset = (800 - y - sig_height) * y_ratio
-
-            print(f"📍 坐标映射: 前端(600x800)→实际({pdf_width}x{pdf_height})")
-            print(f"📍 前端坐标: x={x}, y={y}, sig_w={sig_width}, sig_h={sig_height}")
-            print(f"📍 实际坐标: x_pos={x_pos}, y_offset={y_offset}")
-
-            # 调整签字图片大小以匹配比例
-            sig_image_resized = sig_image.resize(
-                (int(sig_width * x_ratio), int(sig_height * y_ratio)),
-                Image.Resampling.LANCZOS
-            )
-
-            # 在图片上粘贴签字(使用alpha遮罩)
-            page_image.paste(sig_image_resized, (int(x_pos), int(y_offset)), sig_image_resized)
-            images[target_page_idx] = page_image
-        else:
-            print(f"⚠️ 页码 {page_num} 超出范围")
-
-        # 将所有图片转回 PDF(多页)
-        print("📄 正在将图片转回 PDF...")
+        # 保存到输出 buffer
         output_buffer = io.BytesIO()
-        # 保存第一页
-        images[0].save(
-            output_buffer,
-            format='PDF',
-            resolution=150,
-            save_all=True,
-            append_images=images[1:]
-        )
+        pdf_doc.save(output_buffer)
         output_bytes = output_buffer.getvalue()
+        pdf_doc.close()
 
         print(f"✅ 签字嵌入完成,输出大小: {len(output_bytes)} 字节")
         return output_bytes
@@ -700,10 +687,6 @@ def submit_sign():
         download_url = f"/pdf/{filename}"
         print(f"🔗 下载链接: {download_url}")
 
-        # 标记 token 已使用
-        mark_token_used(jwt_token)
-        print("✅ Token 已标记为已使用")
-
         # 尝试回传多维表格
         bitable_success = False
         try:
@@ -716,6 +699,26 @@ def submit_sign():
                     update_bitable_record(token_data['record_id'], signed_pdf_field, file_token, config)
                     bitable_success = True
                     print("✅ 已回传多维表格")
+                    
+                    # 清理本地PDF文件（回传成功后删除）
+                    try:
+                        # 删除签字后的PDF
+                        if os.path.exists(local_path):
+                            os.remove(local_path)
+                            print(f"🗑️ 已删除签字PDF: {local_path}")
+                        # 删除原始PDF
+                        source_pdf_url = token_data.get('pdf_url', '')
+                        if source_pdf_url and source_pdf_url.startswith('/pdf/'):
+                            source_filename = source_pdf_url.replace('/pdf/', '')
+                            source_path = os.path.join(PDF_DIR, source_filename)
+                            if os.path.exists(source_path):
+                                os.remove(source_path)
+                                print(f"🗑️ 已删除原始PDF: {source_path}")
+                    except Exception as cleanup_err:
+                        print(f"⚠️ 清理本地文件失败: {cleanup_err}")
+                    
+                    # 删除 token 记录
+                    delete_token(jwt_token)
                 else:
                     print("⚠️ 上传失败,跳过多维表格更新")
             else:

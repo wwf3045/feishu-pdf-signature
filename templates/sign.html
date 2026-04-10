@@ -446,7 +446,7 @@
             </div>
             <div class="signature-area">
                 <div class="signature-label">请在下方签字</div>
-            <div class="signature-hint" style="font-size:13px;color:#666;margin-bottom:12px;">💡 先在左侧 PDF 上点击选择签字位置</div>
+            <div class="signature-hint" id="submit-hint" style="font-size:13px;color:#666;margin-bottom:12px;">💡 请先在左侧 PDF 上点击选择签字位置，然后在下方签字</div>
                 <div class="signature-canvas-wrapper">
                     <canvas id="signature-canvas"></canvas>
                     <div class="signature-placeholder" id="signature-placeholder">
@@ -517,6 +517,7 @@
         let strokeColor = '#000000';
         let strokeWidth = 3;
         let hasSignature = false;
+        let hasMarker = false;  // 是否已在PDF上放置签字框
         let signaturePosition = null;  // {x, y, width, height} 在 PDF 坐标中的位置
         let pageScale = 1;  // PDF 渲染缩放比例
         
@@ -707,6 +708,8 @@
             
             console.log('onPdfClick - 设置新位置:', signaturePosition, {rect, x, y});
             updateSignatureMarker();
+            hasMarker = true;
+            updateSubmitButton();
         }
         
         let markerDragging = false;
@@ -749,6 +752,24 @@
             signatureMarker.style.top = screenY + 'px';
             signatureMarker.style.width = screenW + 'px';
             signatureMarker.style.height = screenH + 'px';
+        }
+        
+        // 更新提交按钮状态和提示文字
+        function updateSubmitButton() {
+            const hint = document.getElementById('submit-hint');
+            if (!hasMarker && !hasSignature) {
+                submitBtn.disabled = true;
+                hint.textContent = '💡 请先在左侧 PDF 上点击选择签字位置，然后在下方签字';
+            } else if (!hasMarker) {
+                submitBtn.disabled = true;
+                hint.textContent = '⚠️ 请先在左侧 PDF 上点击选择签字位置';
+            } else if (!hasSignature) {
+                submitBtn.disabled = true;
+                hint.textContent = '⚠️ 请先在下方签字区域手写签名';
+            } else {
+                submitBtn.disabled = false;
+                hint.textContent = '✅ 已选择签字位置并签名，点击下方按钮提交';
+            }
         }
         
         // 初始化显示尺寸
@@ -944,7 +965,7 @@
                 img.src = savedSignatureData;
                 hasSignature = true;
                 signaturePlaceholder.style.display = 'none';
-                submitBtn.disabled = false;
+                updateSubmitButton();
             }
         }
         
@@ -999,7 +1020,7 @@
             
             hasSignature = true;
             signaturePlaceholder.style.display = 'none';
-            submitBtn.disabled = false;
+            updateSubmitButton();
         }
         
         function draw(e) {
@@ -1065,12 +1086,15 @@
             signatureCtx.clearRect(0, 0, rect.width, rect.height);
             hasSignature = false;
             signaturePlaceholder.style.display = 'block';
-            submitBtn.disabled = true;
+            updateSubmitButton();
         });
         
         // 提交
         submitBtn.addEventListener('click', async () => {
-            if (!hasSignature) return;
+            if (!hasSignature || !hasMarker) {
+                alert('请先在 PDF 上选择签字位置并完成签名后再提交');
+                return;
+            }
             
             showLoading('正在保存签字...');
             
