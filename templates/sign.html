@@ -446,7 +446,7 @@
             </div>
             <div class="signature-area">
                 <div class="signature-label">请在下方签字</div>
-            <div class="signature-hint" id="submit-hint" style="font-size:13px;color:#666;margin-bottom:12px;">💡 请先在左侧 PDF 上点击选择签字位置，然后在下方签字</div>
+            <div class="signature-hint" id="submit-hint" style="font-size:13px;color:#666;margin-bottom:12px;">💡 先在下方手写签字，然后拖动/缩放左侧签名到合适位置</div>
                 <div class="signature-canvas-wrapper">
                     <canvas id="signature-canvas"></canvas>
                     <div class="signature-placeholder" id="signature-placeholder">
@@ -464,10 +464,7 @@
                     <label>笔</label>
                     <input type="range" id="brush-size" min="1" max="10" value="3">
                 </div>
-                <div class="size-control">
-                    <label>框</label>
-                    <input type="range" id="box-size" min="50" max="300" value="150">
-                </div>
+                <div class="size-control"><label>拖拽缩放签名</label></div>
             </div>
             <div class="btn-group" style="padding:16px; background:white; flex-shrink: 0;">
                 <button class="btn btn-secondary" id="clear-btn">清除</button>
@@ -759,10 +756,10 @@
             const hint = document.getElementById('submit-hint');
             if (!hasMarker && !hasSignature) {
                 submitBtn.disabled = true;
-                hint.textContent = '💡 请先在左侧 PDF 上点击选择签字位置，然后在下方签字';
+                hint.textContent = '💡 先手写签字，再拖动/缩放左侧签名到合适位置';
             } else if (!hasMarker) {
                 submitBtn.disabled = true;
-                hint.textContent = '⚠️ 请先在左侧 PDF 上点击选择签字位置';
+                hint.textContent = '⚠️ 请先手写签字，系统会自动放置签名';
             } else if (!hasSignature) {
                 submitBtn.disabled = true;
                 hint.textContent = '⚠️ 请先在下方签字区域手写签名';
@@ -1020,6 +1017,11 @@
             
             hasSignature = true;
             signaturePlaceholder.style.display = 'none';
+            if (!signaturePosition) {
+                signaturePosition = { x: 220, y: 120, width: 160, height: 60, page: currentPage };
+            }
+            hasMarker = true;
+            updateSignatureMarker();
             updateSubmitButton();
         }
         
@@ -1063,21 +1065,6 @@
         // 粗细调整
         document.getElementById('brush-size').addEventListener('input', (e) => {
             strokeWidth = parseInt(e.target.value);
-        });
-        
-        document.getElementById('box-size').addEventListener('input', (e) => {
-            const size = parseInt(e.target.value);
-            if (signaturePosition) {
-                signaturePosition.width = size;
-                signaturePosition.height = Math.round(size / 3);
-                // 保存当前显示尺寸
-                const rect = pdfCanvas.getBoundingClientRect();
-                if (!signaturePosition.pdfDisplayWidth) {
-                    signaturePosition.pdfDisplayWidth = rect.width;
-                    signaturePosition.pdfDisplayHeight = rect.height;
-                }
-                updateSignatureMarker();
-            }
         });
         
         // 清除
@@ -1213,6 +1200,7 @@
         
         // 二维码功能
         let qrGenerated = false;
+        let mobilePoller = null;
         function showQRModal() {
             const modal = document.getElementById('qr-modal');
             const qrContainer = document.getElementById('qrcode');
@@ -1221,7 +1209,7 @@
             if (!qrGenerated) {
                 qrContainer.innerHTML = '';
                 new QRCode(qrContainer, {
-                    text: window.location.href,
+                    text: `${window.location.origin}/mobile-sign?token=${encodeURIComponent(jwtToken)}`,
                     width: 200,
                     height: 200,
                     colorDark: '#667eea',
@@ -1229,6 +1217,30 @@
                     correctLevel: QRCode.CorrectLevel.M
                 });
                 qrGenerated = true;
+            }
+            if (!mobilePoller) {
+                mobilePoller = setInterval(async () => {
+                    const resp = await fetch(`/api/mobile-signature?token=${encodeURIComponent(jwtToken)}`);
+                    const data = await resp.json();
+                    if (data.success && data.signature) {
+                        const img = new Image();
+                        img.onload = () => {
+                            const rect = signatureCanvas.getBoundingClientRect();
+                            signatureCtx.clearRect(0, 0, rect.width, rect.height);
+                            signatureCtx.drawImage(img, 0, 0, rect.width, rect.height);
+                            hasSignature = true;
+                            if (!signaturePosition) signaturePosition = { x: 220, y: 120, width: 160, height: 60, page: currentPage };
+                            hasMarker = true;
+                            signaturePlaceholder.style.display = 'none';
+                            updateSignatureMarker();
+                            updateSubmitButton();
+                        };
+                        img.src = data.signature;
+                        clearInterval(mobilePoller);
+                        mobilePoller = null;
+                        document.getElementById('qr-modal').classList.remove('show');
+                    }
+                }, 2000);
             }
         }
         
