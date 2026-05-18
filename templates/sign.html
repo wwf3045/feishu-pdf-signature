@@ -678,6 +678,12 @@
         function onPdfClick(e) {
             // 防止拖拽标注框时触发
             if (markerDragging) return;
+            // 必须先手写签字，再允许在PDF上点击调整位置
+            if (!hasSignature) {
+                const hint = document.getElementById('submit-hint');
+                hint.textContent = '⚠️ 请先在右侧手写签名，系统会自动生成可拖拽签名图层';
+                return;
+            }
             
             const rect = pdfCanvas.getBoundingClientRect();
             const x = (e.clientX - rect.left);
@@ -756,10 +762,10 @@
             const hint = document.getElementById('submit-hint');
             if (!hasMarker && !hasSignature) {
                 submitBtn.disabled = true;
-                hint.textContent = '💡 先手写签字，再拖动/缩放左侧签名到合适位置';
+                hint.textContent = '💡 先手写签字，系统自动放置签名；再拖动/缩放到合适位置';
             } else if (!hasMarker) {
                 submitBtn.disabled = true;
-                hint.textContent = '⚠️ 请先手写签字，系统会自动放置签名';
+                hint.textContent = '⚠️ 正在初始化签名图层，请稍后';
             } else if (!hasSignature) {
                 submitBtn.disabled = true;
                 hint.textContent = '⚠️ 请先在下方签字区域手写签名';
@@ -1018,7 +1024,8 @@
             hasSignature = true;
             signaturePlaceholder.style.display = 'none';
             if (!signaturePosition) {
-                signaturePosition = { x: 220, y: 120, width: 160, height: 60, page: currentPage };
+                // 默认放在当前页中部偏下，确保“先签字后定位”无需先点PDF
+                signaturePosition = { x: 220, y: 320, width: 160, height: 60, page: currentPage };
             }
             hasMarker = true;
             updateSignatureMarker();
@@ -1229,7 +1236,7 @@
                             signatureCtx.clearRect(0, 0, rect.width, rect.height);
                             signatureCtx.drawImage(img, 0, 0, rect.width, rect.height);
                             hasSignature = true;
-                            if (!signaturePosition) signaturePosition = { x: 220, y: 120, width: 160, height: 60, page: currentPage };
+                            if (!signaturePosition) signaturePosition = { x: 220, y: 320, width: 160, height: 60, page: currentPage };
                             hasMarker = true;
                             signaturePlaceholder.style.display = 'none';
                             updateSignatureMarker();
