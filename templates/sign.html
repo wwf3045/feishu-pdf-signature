@@ -720,6 +720,7 @@
         let resizeHandle = null;
         let markerStartX, markerStartY;
         let markerStartPos;
+        let markerStartScreenRect;
         
         function updateSignatureMarker() {
             if (!signaturePosition || signaturePosition.page !== currentPage) {
@@ -785,6 +786,32 @@
         }
         
         // 标注框拖拽和缩放
+        function getMarkerScreenRect() {
+            return {
+                left: parseFloat(signatureMarker.style.left) || 0,
+                top: parseFloat(signatureMarker.style.top) || 0,
+                width: parseFloat(signatureMarker.style.width) || 0,
+                height: parseFloat(signatureMarker.style.height) || 0
+            };
+        }
+
+        function applyScreenRectToSignaturePosition(screenRect) {
+            const rect = pdfCanvas.getBoundingClientRect();
+            const minSizePx = 20;
+            const clampedW = Math.max(minSizePx, Math.min(screenRect.width, rect.width));
+            const clampedH = Math.max(minSizePx, Math.min(screenRect.height, rect.height));
+            const clampedL = Math.max(0, Math.min(screenRect.left, rect.width - clampedW));
+            const clampedT = Math.max(0, Math.min(screenRect.top, rect.height - clampedH));
+
+            signaturePosition.x = (clampedL / rect.width) * 600;
+            signaturePosition.width = (clampedW / rect.width) * 600;
+            signaturePosition.height = (clampedH / rect.height) * 800;
+            signaturePosition.y = (1 - ((clampedT + clampedH) / rect.height)) * 800;
+            signaturePosition.pdfDisplayWidth = rect.width;
+            signaturePosition.pdfDisplayHeight = rect.height;
+            signaturePosition.page = currentPage;
+        }
+
         signatureMarker.addEventListener('mousedown', (e) => {
             if (e.target.classList.contains('marker-handle')) {
                 // 开始缩放
@@ -794,6 +821,7 @@
                 markerStartX = e.clientX;
                 markerStartY = e.clientY;
                 initDisplaySize();
+                markerStartScreenRect = getMarkerScreenRect();
                 markerStartPos = {
                     x: signaturePosition.x,
                     y: signaturePosition.y,
@@ -809,6 +837,7 @@
                 markerStartX = e.clientX;
                 markerStartY = e.clientY;
                 initDisplaySize();
+                markerStartScreenRect = getMarkerScreenRect();
                 markerStartPos = {
                     x: signaturePosition.x,
                     y: signaturePosition.y,
@@ -826,6 +855,7 @@
                 markerStartX = e.touches[0].clientX;
                 markerStartY = e.touches[0].clientY;
                 initDisplaySize();
+                markerStartScreenRect = getMarkerScreenRect();
                 markerStartPos = {
                     x: signaturePosition.x,
                     y: signaturePosition.y,
@@ -840,6 +870,7 @@
                 markerStartX = e.touches[0].clientX;
                 markerStartY = e.touches[0].clientY;
                 initDisplaySize();
+                markerStartScreenRect = getMarkerScreenRect();
                 markerStartPos = {
                     x: signaturePosition.x,
                     y: signaturePosition.y,
@@ -851,64 +882,70 @@
         
         document.addEventListener('mousemove', (e) => {
             if (markerDragging) {
-                const dx = (e.clientX - markerStartX) / pageScale;
-                const dy = -(e.clientY - markerStartY) / pageScale;
-                signaturePosition.x = markerStartPos.x + dx;
-                signaturePosition.y = markerStartPos.y + dy;
+                const dx = e.clientX - markerStartX;
+                const dy = e.clientY - markerStartY;
+                const nextRect = {
+                    left: markerStartScreenRect.left + dx,
+                    top: markerStartScreenRect.top + dy,
+                    width: markerStartScreenRect.width,
+                    height: markerStartScreenRect.height
+                };
+                applyScreenRectToSignaturePosition(nextRect);
                 updateSignatureMarker();
             } else if (markerResizing) {
-                const dx = (e.clientX - markerStartX) / pageScale;
-                const dy = -(e.clientY - markerStartY) / pageScale;
-                const minSize = 30;
-                
+                const dx = e.clientX - markerStartX;
+                const dy = e.clientY - markerStartY;
+                const nextRect = { ...markerStartScreenRect };
                 if (resizeHandle.includes('e')) {
-                    signaturePosition.width = Math.max(minSize, markerStartPos.width + dx);
+                    nextRect.width = markerStartScreenRect.width + dx;
                 }
                 if (resizeHandle.includes('w')) {
-                    const newWidth = Math.max(minSize, markerStartPos.width - dx);
-                    signaturePosition.x = markerStartPos.x + dx;
-                    signaturePosition.width = newWidth;
+                    nextRect.left = markerStartScreenRect.left + dx;
+                    nextRect.width = markerStartScreenRect.width - dx;
                 }
                 if (resizeHandle.includes('s')) {
-                    signaturePosition.height = Math.max(minSize, markerStartPos.height + dy);
+                    nextRect.height = markerStartScreenRect.height + dy;
                 }
                 if (resizeHandle.includes('n')) {
-                    const newHeight = Math.max(minSize, markerStartPos.height - dy);
-                    signaturePosition.y = markerStartPos.y + dy;
-                    signaturePosition.height = newHeight;
+                    nextRect.top = markerStartScreenRect.top + dy;
+                    nextRect.height = markerStartScreenRect.height - dy;
                 }
+                applyScreenRectToSignaturePosition(nextRect);
                 updateSignatureMarker();
             }
         });
         
         document.addEventListener('touchmove', (e) => {
             if (markerDragging && e.touches.length === 1) {
-                const dx = (e.touches[0].clientX - markerStartX) / pageScale;
-                const dy = -(e.touches[0].clientY - markerStartY) / pageScale;
-                signaturePosition.x = markerStartPos.x + dx;
-                signaturePosition.y = markerStartPos.y + dy;
+                const dx = e.touches[0].clientX - markerStartX;
+                const dy = e.touches[0].clientY - markerStartY;
+                const nextRect = {
+                    left: markerStartScreenRect.left + dx,
+                    top: markerStartScreenRect.top + dy,
+                    width: markerStartScreenRect.width,
+                    height: markerStartScreenRect.height
+                };
+                applyScreenRectToSignaturePosition(nextRect);
                 updateSignatureMarker();
             } else if (markerResizing && e.touches.length === 1) {
-                const dx = (e.touches[0].clientX - markerStartX) / pageScale;
-                const dy = -(e.touches[0].clientY - markerStartY) / pageScale;
-                const minSize = 30;
-                
+                const dx = e.touches[0].clientX - markerStartX;
+                const dy = e.touches[0].clientY - markerStartY;
+                const nextRect = { ...markerStartScreenRect };
                 if (resizeHandle.includes('e')) {
-                    signaturePosition.width = Math.max(minSize, markerStartPos.width + dx);
+                    nextRect.width = markerStartScreenRect.width + dx;
                 }
                 if (resizeHandle.includes('w')) {
-                    const newWidth = Math.max(minSize, markerStartPos.width - dx);
-                    signaturePosition.x = markerStartPos.x + dx;
-                    signaturePosition.width = newWidth;
+                    nextRect.left = markerStartScreenRect.left + dx;
+                    nextRect.width = markerStartScreenRect.width - dx;
                 }
                 if (resizeHandle.includes('s')) {
-                    signaturePosition.height = Math.max(minSize, markerStartPos.height + dy);
+                    nextRect.height = markerStartScreenRect.height + dy;
                 }
                 if (resizeHandle.includes('n')) {
-                    const newHeight = Math.max(minSize, markerStartPos.height - dy);
-                    signaturePosition.y = markerStartPos.y + dy;
-                    signaturePosition.height = newHeight;
+                    nextRect.top = markerStartScreenRect.top + dy;
+                    nextRect.height = markerStartScreenRect.height - dy;
                 }
+                applyScreenRectToSignaturePosition(nextRect);
                 updateSignatureMarker();
             }
         });
