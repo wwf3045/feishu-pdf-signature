@@ -497,6 +497,41 @@ def sign_page():
 
     return render_template('sign.html', jwt_token=token)
 
+@app.route('/mobile-sign', methods=['GET', 'POST'])
+def mobile_sign_page():
+    if request.method == 'POST':
+        return jsonify({'success': False, 'error': '请使用 GET 打开手机签字页'}), 405
+    token = request.args.get('token')
+    if not token:
+        return "缺少签字令牌", 400
+    token_data = validate_token(token)
+    if not token_data:
+        return "签字链接无效或已使用", 400
+    return render_template('mobile_sign.html', jwt_token=token)
+
+@app.route('/api/mobile-signature', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/api/mobile-signature/', methods=['GET', 'POST', 'OPTIONS'])
+def mobile_signature_api():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    token = request.args.get('token') if request.method == 'GET' else (request.json or {}).get('token')
+    if not token:
+        return jsonify({'success': False, 'error': '缺少token'}), 400
+    token_data = validate_token(token)
+    if not token_data:
+        return jsonify({'success': False, 'error': 'token无效'}), 400
+
+    tokens = load_tokens()
+    if request.method == 'POST':
+        signature = (request.json or {}).get('signature')
+        if not signature:
+            return jsonify({'success': False, 'error': '缺少签名'}), 400
+        tokens[token]['mobile_signature'] = signature
+        save_tokens(tokens)
+        return jsonify({'success': True})
+
+    return jsonify({'success': True, 'signature': tokens.get(token, {}).get('mobile_signature')})
+
 @app.route('/pdf/<filename>')
 def serve_pdf(filename):
     """提供下载的 PDF 文件"""

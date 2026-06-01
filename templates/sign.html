@@ -446,7 +446,7 @@
             </div>
             <div class="signature-area">
                 <div class="signature-label">请在下方签字</div>
-            <div class="signature-hint" id="submit-hint" style="font-size:13px;color:#666;margin-bottom:12px;">💡 请先在左侧 PDF 上点击选择签字位置，然后在下方签字</div>
+            <div class="signature-hint" id="submit-hint" style="font-size:13px;color:#666;margin-bottom:12px;">💡 先在下方手写签字，然后拖动/缩放左侧签名到合适位置</div>
                 <div class="signature-canvas-wrapper">
                     <canvas id="signature-canvas"></canvas>
                     <div class="signature-placeholder" id="signature-placeholder">
@@ -464,10 +464,7 @@
                     <label>笔</label>
                     <input type="range" id="brush-size" min="1" max="10" value="3">
                 </div>
-                <div class="size-control">
-                    <label>框</label>
-                    <input type="range" id="box-size" min="50" max="300" value="150">
-                </div>
+                <div class="size-control"><label>拖拽缩放签名</label></div>
             </div>
             <div class="btn-group" style="padding:16px; background:white; flex-shrink: 0;">
                 <button class="btn btn-secondary" id="clear-btn">清除</button>
@@ -681,6 +678,12 @@
         function onPdfClick(e) {
             // 防止拖拽标注框时触发
             if (markerDragging) return;
+            // 必须先手写签字，再允许在PDF上点击调整位置
+            if (!hasSignature) {
+                const hint = document.getElementById('submit-hint');
+                hint.textContent = '⚠️ 请先在右侧手写签名，系统会自动生成可拖拽签名图层';
+                return;
+            }
             
             const rect = pdfCanvas.getBoundingClientRect();
             const x = (e.clientX - rect.left);
@@ -717,6 +720,7 @@
         let resizeHandle = null;
         let markerStartX, markerStartY;
         let markerStartPos;
+        let markerStartScreenRect;
         
         function updateSignatureMarker() {
             if (!signaturePosition || signaturePosition.page !== currentPage) {
@@ -759,10 +763,10 @@
             const hint = document.getElementById('submit-hint');
             if (!hasMarker && !hasSignature) {
                 submitBtn.disabled = true;
-                hint.textContent = '💡 请先在左侧 PDF 上点击选择签字位置，然后在下方签字';
+                hint.textContent = '💡 先手写签字，系统自动放置签名；再拖动/缩放到合适位置';
             } else if (!hasMarker) {
                 submitBtn.disabled = true;
-                hint.textContent = '⚠️ 请先在左侧 PDF 上点击选择签字位置';
+                hint.textContent = '⚠️ 正在初始化签名图层，请稍后';
             } else if (!hasSignature) {
                 submitBtn.disabled = true;
                 hint.textContent = '⚠️ 请先在下方签字区域手写签名';
@@ -782,6 +786,32 @@
         }
         
         // 标注框拖拽和缩放
+        function getMarkerScreenRect() {
+            return {
+                left: parseFloat(signatureMarker.style.left) || 0,
+                top: parseFloat(signatureMarker.style.top) || 0,
+                width: parseFloat(signatureMarker.style.width) || 0,
+                height: parseFloat(signatureMarker.style.height) || 0
+            };
+        }
+
+        function applyScreenRectToSignaturePosition(screenRect) {
+            const rect = pdfCanvas.getBoundingClientRect();
+            const minSizePx = 20;
+            const clampedW = Math.max(minSizePx, Math.min(screenRect.width, rect.width));
+            const clampedH = Math.max(minSizePx, Math.min(screenRect.height, rect.height));
+            const clampedL = Math.max(0, Math.min(screenRect.left, rect.width - clampedW));
+            const clampedT = Math.max(0, Math.min(screenRect.top, rect.height - clampedH));
+
+            signaturePosition.x = (clampedL / rect.width) * 600;
+            signaturePosition.width = (clampedW / rect.width) * 600;
+            signaturePosition.height = (clampedH / rect.height) * 800;
+            signaturePosition.y = (1 - ((clampedT + clampedH) / rect.height)) * 800;
+            signaturePosition.pdfDisplayWidth = rect.width;
+            signaturePosition.pdfDisplayHeight = rect.height;
+            signaturePosition.page = currentPage;
+        }
+
         signatureMarker.addEventListener('mousedown', (e) => {
             if (e.target.classList.contains('marker-handle')) {
                 // 开始缩放
@@ -791,6 +821,7 @@
                 markerStartX = e.clientX;
                 markerStartY = e.clientY;
                 initDisplaySize();
+                markerStartScreenRect = getMarkerScreenRect();
                 markerStartPos = {
                     x: signaturePosition.x,
                     y: signaturePosition.y,
@@ -806,6 +837,7 @@
                 markerStartX = e.clientX;
                 markerStartY = e.clientY;
                 initDisplaySize();
+                markerStartScreenRect = getMarkerScreenRect();
                 markerStartPos = {
                     x: signaturePosition.x,
                     y: signaturePosition.y,
@@ -823,6 +855,7 @@
                 markerStartX = e.touches[0].clientX;
                 markerStartY = e.touches[0].clientY;
                 initDisplaySize();
+                markerStartScreenRect = getMarkerScreenRect();
                 markerStartPos = {
                     x: signaturePosition.x,
                     y: signaturePosition.y,
@@ -837,6 +870,7 @@
                 markerStartX = e.touches[0].clientX;
                 markerStartY = e.touches[0].clientY;
                 initDisplaySize();
+                markerStartScreenRect = getMarkerScreenRect();
                 markerStartPos = {
                     x: signaturePosition.x,
                     y: signaturePosition.y,
@@ -848,64 +882,70 @@
         
         document.addEventListener('mousemove', (e) => {
             if (markerDragging) {
-                const dx = (e.clientX - markerStartX) / pageScale;
-                const dy = -(e.clientY - markerStartY) / pageScale;
-                signaturePosition.x = markerStartPos.x + dx;
-                signaturePosition.y = markerStartPos.y + dy;
+                const dx = e.clientX - markerStartX;
+                const dy = e.clientY - markerStartY;
+                const nextRect = {
+                    left: markerStartScreenRect.left + dx,
+                    top: markerStartScreenRect.top + dy,
+                    width: markerStartScreenRect.width,
+                    height: markerStartScreenRect.height
+                };
+                applyScreenRectToSignaturePosition(nextRect);
                 updateSignatureMarker();
             } else if (markerResizing) {
-                const dx = (e.clientX - markerStartX) / pageScale;
-                const dy = -(e.clientY - markerStartY) / pageScale;
-                const minSize = 30;
-                
+                const dx = e.clientX - markerStartX;
+                const dy = e.clientY - markerStartY;
+                const nextRect = { ...markerStartScreenRect };
                 if (resizeHandle.includes('e')) {
-                    signaturePosition.width = Math.max(minSize, markerStartPos.width + dx);
+                    nextRect.width = markerStartScreenRect.width + dx;
                 }
                 if (resizeHandle.includes('w')) {
-                    const newWidth = Math.max(minSize, markerStartPos.width - dx);
-                    signaturePosition.x = markerStartPos.x + dx;
-                    signaturePosition.width = newWidth;
+                    nextRect.left = markerStartScreenRect.left + dx;
+                    nextRect.width = markerStartScreenRect.width - dx;
                 }
                 if (resizeHandle.includes('s')) {
-                    signaturePosition.height = Math.max(minSize, markerStartPos.height + dy);
+                    nextRect.height = markerStartScreenRect.height + dy;
                 }
                 if (resizeHandle.includes('n')) {
-                    const newHeight = Math.max(minSize, markerStartPos.height - dy);
-                    signaturePosition.y = markerStartPos.y + dy;
-                    signaturePosition.height = newHeight;
+                    nextRect.top = markerStartScreenRect.top + dy;
+                    nextRect.height = markerStartScreenRect.height - dy;
                 }
+                applyScreenRectToSignaturePosition(nextRect);
                 updateSignatureMarker();
             }
         });
         
         document.addEventListener('touchmove', (e) => {
             if (markerDragging && e.touches.length === 1) {
-                const dx = (e.touches[0].clientX - markerStartX) / pageScale;
-                const dy = -(e.touches[0].clientY - markerStartY) / pageScale;
-                signaturePosition.x = markerStartPos.x + dx;
-                signaturePosition.y = markerStartPos.y + dy;
+                const dx = e.touches[0].clientX - markerStartX;
+                const dy = e.touches[0].clientY - markerStartY;
+                const nextRect = {
+                    left: markerStartScreenRect.left + dx,
+                    top: markerStartScreenRect.top + dy,
+                    width: markerStartScreenRect.width,
+                    height: markerStartScreenRect.height
+                };
+                applyScreenRectToSignaturePosition(nextRect);
                 updateSignatureMarker();
             } else if (markerResizing && e.touches.length === 1) {
-                const dx = (e.touches[0].clientX - markerStartX) / pageScale;
-                const dy = -(e.touches[0].clientY - markerStartY) / pageScale;
-                const minSize = 30;
-                
+                const dx = e.touches[0].clientX - markerStartX;
+                const dy = e.touches[0].clientY - markerStartY;
+                const nextRect = { ...markerStartScreenRect };
                 if (resizeHandle.includes('e')) {
-                    signaturePosition.width = Math.max(minSize, markerStartPos.width + dx);
+                    nextRect.width = markerStartScreenRect.width + dx;
                 }
                 if (resizeHandle.includes('w')) {
-                    const newWidth = Math.max(minSize, markerStartPos.width - dx);
-                    signaturePosition.x = markerStartPos.x + dx;
-                    signaturePosition.width = newWidth;
+                    nextRect.left = markerStartScreenRect.left + dx;
+                    nextRect.width = markerStartScreenRect.width - dx;
                 }
                 if (resizeHandle.includes('s')) {
-                    signaturePosition.height = Math.max(minSize, markerStartPos.height + dy);
+                    nextRect.height = markerStartScreenRect.height + dy;
                 }
                 if (resizeHandle.includes('n')) {
-                    const newHeight = Math.max(minSize, markerStartPos.height - dy);
-                    signaturePosition.y = markerStartPos.y + dy;
-                    signaturePosition.height = newHeight;
+                    nextRect.top = markerStartScreenRect.top + dy;
+                    nextRect.height = markerStartScreenRect.height - dy;
                 }
+                applyScreenRectToSignaturePosition(nextRect);
                 updateSignatureMarker();
             }
         });
@@ -1020,6 +1060,12 @@
             
             hasSignature = true;
             signaturePlaceholder.style.display = 'none';
+            if (!signaturePosition) {
+                // 默认放在当前页中部偏下，确保“先签字后定位”无需先点PDF
+                signaturePosition = { x: 220, y: 320, width: 160, height: 60, page: currentPage };
+            }
+            hasMarker = true;
+            updateSignatureMarker();
             updateSubmitButton();
         }
         
@@ -1063,21 +1109,6 @@
         // 粗细调整
         document.getElementById('brush-size').addEventListener('input', (e) => {
             strokeWidth = parseInt(e.target.value);
-        });
-        
-        document.getElementById('box-size').addEventListener('input', (e) => {
-            const size = parseInt(e.target.value);
-            if (signaturePosition) {
-                signaturePosition.width = size;
-                signaturePosition.height = Math.round(size / 3);
-                // 保存当前显示尺寸
-                const rect = pdfCanvas.getBoundingClientRect();
-                if (!signaturePosition.pdfDisplayWidth) {
-                    signaturePosition.pdfDisplayWidth = rect.width;
-                    signaturePosition.pdfDisplayHeight = rect.height;
-                }
-                updateSignatureMarker();
-            }
         });
         
         // 清除
@@ -1213,6 +1244,7 @@
         
         // 二维码功能
         let qrGenerated = false;
+        let mobilePoller = null;
         function showQRModal() {
             const modal = document.getElementById('qr-modal');
             const qrContainer = document.getElementById('qrcode');
@@ -1221,7 +1253,7 @@
             if (!qrGenerated) {
                 qrContainer.innerHTML = '';
                 new QRCode(qrContainer, {
-                    text: window.location.href,
+                    text: `${window.location.origin}/mobile-sign?token=${encodeURIComponent(jwtToken)}`,
                     width: 200,
                     height: 200,
                     colorDark: '#667eea',
@@ -1229,6 +1261,30 @@
                     correctLevel: QRCode.CorrectLevel.M
                 });
                 qrGenerated = true;
+            }
+            if (!mobilePoller) {
+                mobilePoller = setInterval(async () => {
+                    const resp = await fetch(`/api/mobile-signature?token=${encodeURIComponent(jwtToken)}`);
+                    const data = await resp.json();
+                    if (data.success && data.signature) {
+                        const img = new Image();
+                        img.onload = () => {
+                            const rect = signatureCanvas.getBoundingClientRect();
+                            signatureCtx.clearRect(0, 0, rect.width, rect.height);
+                            signatureCtx.drawImage(img, 0, 0, rect.width, rect.height);
+                            hasSignature = true;
+                            if (!signaturePosition) signaturePosition = { x: 220, y: 320, width: 160, height: 60, page: currentPage };
+                            hasMarker = true;
+                            signaturePlaceholder.style.display = 'none';
+                            updateSignatureMarker();
+                            updateSubmitButton();
+                        };
+                        img.src = data.signature;
+                        clearInterval(mobilePoller);
+                        mobilePoller = null;
+                        document.getElementById('qr-modal').classList.remove('show');
+                    }
+                }, 2000);
             }
         }
         

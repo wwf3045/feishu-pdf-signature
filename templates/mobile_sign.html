@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>手机签字</title>
+<style>body{font-family:sans-serif;padding:16px}.wrap{max-width:520px;margin:0 auto}canvas{width:100%;height:260px;border:2px dashed #ccc;border-radius:8px;touch-action:none}.btns{display:flex;gap:10px;margin-top:12px}button{flex:1;padding:12px;border:none;border-radius:8px}#ok{background:#667eea;color:#fff}</style>
+</head>
+<body><div class="wrap"><h3>请手写签字</h3><canvas id="c"></canvas><div class="btns"><button id="clear">清除</button><button id="ok">提交签字</button></div><p id="msg"></p></div>
+<script>
+const token='{{ jwt_token }}'; const c=document.getElementById('c'); const ctx=c.getContext('2d');
+function rs(){const dpr=window.devicePixelRatio||1;c.width=c.clientWidth*dpr;c.height=c.clientHeight*dpr;ctx.scale(dpr,dpr);ctx.lineCap='round';ctx.lineJoin='round';ctx.lineWidth=3}
+rs();window.addEventListener('resize',rs);
+let draw=false,last={x:0,y:0};
+function pos(e){const r=c.getBoundingClientRect();const t=e.touches?e.touches[0]:e;return{x:t.clientX-r.left,y:t.clientY-r.top}}
+function s(e){e.preventDefault();draw=true;last=pos(e)} function m(e){if(!draw)return;e.preventDefault();const p=pos(e);ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(p.x,p.y);ctx.stroke();last=p} function u(){draw=false}
+c.addEventListener('mousedown',s);c.addEventListener('mousemove',m);c.addEventListener('mouseup',u);c.addEventListener('mouseout',u);c.addEventListener('touchstart',s);c.addEventListener('touchmove',m);c.addEventListener('touchend',u);
+document.getElementById('clear').onclick=()=>ctx.clearRect(0,0,c.width,c.height);
+document.getElementById('ok').onclick=async()=>{const r=await fetch('/api/mobile-signature',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,signature:c.toDataURL('image/png')})});const d=await r.json();document.getElementById('msg').textContent=d.success?'✅ 已提交，可返回电脑端调整位置并提交PDF':'❌ 提交失败';};
+</script></body></html>
